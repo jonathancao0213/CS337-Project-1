@@ -9,22 +9,44 @@ from spacy.matcher import Matcher
 from spacy.tokens import Span
 from string import punctuation
 import operator
+import time
+
+start_time = time.time()
+
+# Function to see if two strings are close enough (essentially levenstein)
+def closeenough(a,b): 
+  a = a.split() 
+  b = b.split() 
+  k = set(a).symmetric_difference(set(b)) 
+  return True if len(k) <= 2 else False
+
 
 OFFICIAL_AWARDS_1315 = ['cecil b. demille award', 'best motion picture - drama', 'best performance by an actress in a motion picture - drama', 'best performance by an actor in a motion picture - drama', 'best motion picture - comedy or musical', 'best performance by an actress in a motion picture - comedy or musical', 'best performance by an actor in a motion picture - comedy or musical', 'best animated feature film', 'best foreign language film', 'best performance by an actress in a supporting role in a motion picture', 'best performance by an actor in a supporting role in a motion picture', 'best director - motion picture', 'best screenplay - motion picture', 'best original score - motion picture', 'best original song - motion picture', 'best television series - drama', 'best performance by an actress in a television series - drama', 'best performance by an actor in a television series - drama', 'best television series - comedy or musical', 'best performance by an actress in a television series - comedy or musical', 'best performance by an actor in a television series - comedy or musical', 'best mini-series or motion picture made for television', 'best performance by an actress in a mini-series or motion picture made for television', 'best performance by an actor in a mini-series or motion picture made for television', 'best performance by an actress in a supporting role in a series, mini-series or motion picture made for television', 'best performance by an actor in a supporting role in a series, mini-series or motion picture made for television']
 OFFICIAL_AWARDS_1819 = ['best motion picture - drama', 'best motion picture - musical or comedy', 'best performance by an actress in a motion picture - drama', 'best performance by an actor in a motion picture - drama', 'best performance by an actress in a motion picture - musical or comedy', 'best performance by an actor in a motion picture - musical or comedy', 'best performance by an actress in a supporting role in any motion picture', 'best performance by an actor in a supporting role in any motion picture', 'best director - motion picture', 'best screenplay - motion picture', 'best motion picture - animated', 'best motion picture - foreign language', 'best original score - motion picture', 'best original song - motion picture', 'best television series - drama', 'best television series - musical or comedy', 'best television limited series or motion picture made for television', 'best performance by an actress in a limited series or a motion picture made for television', 'best performance by an actor in a limited series or a motion picture made for television', 'best performance by an actress in a television series - drama', 'best performance by an actor in a television series - drama', 'best performance by an actress in a television series - musical or comedy', 'best performance by an actor in a television series - musical or comedy', 'best performance by an actress in a supporting role in a series, limited series or motion picture made for television', 'best performance by an actor in a supporting role in a series, limited series or motion picture made for television', 'cecil b. demille award']
 
-# Make DF
+
+new_award_names = [0]*len(OFFICIAL_AWARDS_1315) # Or the other one
+for i in range(len(OFFICIAL_AWARDS_1315)):
+    new_award_names[i] = OFFICIAL_AWARDS_1315[i].lower()
+    new_award_names[i] = OFFICIAL_AWARDS_1315[i].replace(" in ", " ").replace(" a ", " ").replace(" or ", " ").replace(" – ", " ").replace(" - ", " ").lower()
+#     if "television" in new_award_names[i]:
+#         new_award_names[i].append("tv")
+
+
+# Make DF -------------------------------------------------------------------------------------------------------------
 year = "2013" # change this from year to year
 df = pd.read_json(('../gg' + year + '.json'))
 df = df['text']
 df = df.str.replace('#GoldenGlobes|#GoldenGlobe|Golden Globe|Golden Globes', "", case = False, regex = False)
 
-# Make dictionaries for each field
+
+# Make dictionaries for each field ------------------------------------------------------------------------------------
 nowords = ['think', 'thinking', 'should', 'maybe']
 
 hosts = {}
 hosts = defaultdict(lambda: 1, hosts)
 host_words = ['host', 'hosts', 'hostess', 'hosted', 'hosting']
+# Uses nowords
 
 award_names = {}
 award_names = defaultdict(lambda: 1, award_names)
@@ -41,9 +63,17 @@ award_nominees = defaultdict(lambda: 1, award_nominees)
 
 award_presenters = {}
 award_presenters = defaultdict(lambda: 1, award_presenters)
-award_presenters_words = [' presents']
 # Uses nowords
 
+
+# Instantiate some dictionaries ---------------------------------------------------------------------------------------
+for award in OFFICIAL_AWARDS_1315:
+    award_winners[award] = ''
+    award_presenters[award] = []
+    award_nominees[award] = []
+
+
+# Patterns ------------------------------------------------------------------------------------------------------------
 # Pattern for award names
 award_pattern = [{"ORTH":'Best'}, {"DEP": 'compound', 'OP':'+'}, {"POS":'NOUN', 'OP':'*'}, {'IS_PUNCT': True, 'OP':'?'}, {"POS": 'PROPN', 'OP':'*'}]
 
@@ -77,11 +107,61 @@ nominee_pattern2 = [{"ORTH":'Best'}, {"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}]
 nominee_matcher = Matcher(nlp.vocab)
 nominee_matcher.add("Nominee", [nominee_pattern1, nominee_pattern2])
 
+
+# Loop through df -----------------------------------------------------------------------------------------------------
 for i, text in df.iteritems():
-    if any(x in a_string for x in matches)
+    doc = nlp(text)
+
+    # Nominees pattern matcher
+    if 'Best' in text:
+        nominee_matches = nominee_matcher(doc)
+        if len(nominee_matches) != 0:
+            span = doc[nominee_matches[-1][1]:nominee_matches[-1][2]]
+            sent = str(span).strip(punctuation).strip().replace('- ','').lower()
+            if "tv" in sent:
+                sent.replace("tv",'television')
+                
+            # awarded = 0
+            for i, award in enumerate(new_award_names):
+                if sent == award or sent in award or closeenough(sent, award):
+                    for ent in nlp(text.replace("sent","")).ents:
+                        if ent.label_ == "PERSON" or ent.label_ == "WORK_OF_ART":
+                            award_nominees[list(award_nominees)[i]].append(ent.text)
+                            # awarded = 1
+
+    if not any(x in text.lower() for x in nowords):
+
+        # Award names pattern matcher
+        if 'Best' in text:
+            award_matches = award_matcher(doc)
+            if len(award_matches) != 0:
+                span = doc[award_matches[-1][1]:award_matches[-1][2]]
+                award_names[str(span).strip(punctuation).strip()] += 1
+
+        # Award presenters pattern matcher
+        if ' presents' in text.lower() or ' present' in text.lower():
+            presenter_matches = presenter_matcher(doc)
+            if len(presenter_matches) != 0:
+                span = doc[presenter_matches[-1][1]:presenter_matches[-1][2]]
+                award_presenters[str(span).strip(punctuation).strip()] += 1
+        
+        # Hosts pattern matcher
+        if any(x in text.lower() for x in host_words):
+            for ent in doc.ents:
+                if ent.label_ == "PERSON":
+                    hosts[ent.text] += 1
+
+        # Award winner pattern matcher
+        if any(x in text.lower() for x in award_winners_words):
+            winner_matches = winner_matcher(doc)
+            if len(winner_matches) != 0:
+                span = doc[winner_matches[-1][1]:winner_matches[-1][2]]
+                award_winners[str(span).strip(punctuation).strip()] += 1
 
 
-
-
-
+print(award_names)
+print(award_winners)
+print(award_presenters)
+print(award_nominees)
+print(print("--- %s seconds ---" % (time.time() - start_time)))
 
