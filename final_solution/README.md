@@ -1,3 +1,4 @@
+
 We made a empty env using miniconda. run 'conda create --name myenv python' to make a new empty enviroment in miniconda
 1)Open/cd to the folder 'final_product'. run python install -r requirements.txt.
 2) Put the 'gg_2015' and 'gg_2013' data inside of final_solution. run python gg_api.py
