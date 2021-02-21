@@ -16,12 +16,74 @@ from spacy.tokens import Span
 from string import punctuation
 
 nlp = spacy.load('en_core_web_md')
-matcher = Matcher(nlp.vocab)
 
-if year == '2013' or year == '2015':
-    new_award_names = OFFICIAL_AWARDS_1315
+if year == 2013 or year == 2015:
+    award_names = OFFICIAL_AWARDS_1315
 else:
-    new_award_names = OFFICIAL_AWARDS_1819
+    award_names = OFFICIAL_AWARDS_1819
+
+def map_to_a_award(tweet):
+    awards = {}
+    tweet = tweet.lower()
+    for award in award_names:
+        split_award = award.split()
+        award_dist = 0
+        split_tweet = tweet.split()
+        for word in tweet.split():
+            min_val = float('inf')
+            for word2 in award.split():
+                min_val = min(min_val,Levenshtein.distance(word, word2))
+            award_dist += min_val
+        awards[award] = award_dist
+        
+    val = min(awards.values())
+    res = [key for key in awards if awards[key] == val]
+    return res
+
+def find_mapping(matches):
+    winner_len = 0
+    award_len = 0
+    winner = ''
+    award = ''
+    for match_id, start, end in matches:
+        string_id = nlp.vocab.strings[match_id]
+        span = doc[start:end]
+        span_len = len(span.text)
+        if string_id == 'Person' and len(span)<= 2:
+            if winner_len < span_len:
+                winner = span.text
+                winner_len = span_len
+        if string_id == 'Film':
+            if winner_len > span_len:
+                winner = span.text
+                winner_len = span_len       
+        elif string_id == 'Award':
+            if award_len < span_len:
+                award = span.text
+                award_len = span_len
+    winner = str(winner).strip(punctuation).strip()
+    award = str(award).strip(punctuation).strip()
+    key = (winner.lower(),award)
+    return key
+
+def distance(t1,r1):
+    t = t1.split()
+    r = r1.split()
+    if len(t) >= len(r):
+        long = t
+        short = r
+        ret = t1
+    else:
+        long = r
+        short = t
+        ret = r1
+    dist = 0
+    for word in short:
+        min_val = float('inf')
+        for word2 in long:
+            min_val = min(min_val,Levenshtein.distance(word, word2))
+        dist += min_val
+    return dist,ret
 
 def DistMeasure(tweet):
     awards = {}
@@ -48,11 +110,14 @@ def DistMeasure(tweet):
         res = []
     return res
 
+def commonwords(a,b):
+    return len(set(a.split()).intersection(set(b.split())))
+
 def get_hosts(year):
     '''Hosts is a list of one or more strings. Do NOT change the name
     of this function or what it returns.'''
     # Your code here
-    df = pd.read_json(('../gg' + year + '.json'))
+    df = pd.read_json('./gg%d.json' % year)
     df = df['text']
     host_df = df[df.str.contains('host|hosts|hostess|hosted|hosting', case = False)]
     df = df[~df.str.contains('think|thinking|should|maybe', case = False)]
@@ -86,7 +151,61 @@ def get_hosts(year):
 def get_awards(year):
     '''Awards is a list of strings. Do NOT change the name
     of this function or what it returns.'''
-    # Your code here
+    df = pd.read_json('./gg%d.json' % year)
+    df = df['text']
+    df = df[~df.str.contains('think|should|maybe', case = False)]
+    df = df[df.str.contains('best', case = False)]
+    df = df.str.replace('http\S+|www.\S+', '', case=False,regex=True)
+    df = df.str.replace('TV|tv', "television", case = False, regex = True)
+    best_df = df.str.replace('#GoldenGlobes|#GoldenGlobe|golden|globes|globes', "", case = False, regex = True)
+
+    if best_df.shape[0] >5000:
+        best_df = best_df.sample(n=5000)
+    best_df.shape[0]
+
+    pattern = [{"LOWER":'best'}, {"DEP":{"IN":['compound','nmod','dobj','prep','det','pobj','amod','nsubj','ROOT']}, 'OP':'+'},{'ORTH': '-', 'OP':'?'}, {"POS": {"IN": ['PROPN','NOUN','CCONJ','ADJ']}, 'OP':'*'}]
+    pattern2 = [{"ENT_TYPE":{"IN":['PERSON','WORK_OF_ART']},'OP':'+'}]
+
+    matcher = Matcher(nlp.vocab)
+    matcher.add('Winner', [pattern])
+    matcher2 = Matcher(nlp.vocab)
+    matcher2.add('Deleter',[pattern2])
+
+    awards = {}
+    awards = defaultdict(lambda: 1, awards)
+    for i, text in best_df.iteritems():
+        doc = nlp(text)
+        matches = matcher(doc)
+        if len(matches) != 0:
+            span = doc[matches[-1][1]:matches[-1][2]]
+            awards[str(span).strip(punctuation).strip()] = awards[str(span).strip(punctuation).strip()] + 1
+
+    for key in list(awards):
+    doc = nlp(key)
+    matches = matcher2(doc)
+    if len(matches) != 0:
+        awards.pop(key)
+    awards = sorted(awards.items(), key=lambda item: item[1], reverse = True)
+
+    new_awards = []
+    for i in awards:
+        if i[1] > 2:
+            new_awards.append(i[0].lower())
+
+    final_list = []
+    final_list.append(new_awards[0])
+
+    for awrd in new_awards[1:]:
+        similar = False
+        for i,ans in enumerate(final_list):
+            dist,long = distance(awrd,ans)
+            if dist <= 1:
+                similar = True
+                final_list[i] = long
+        if (not similar):
+            final_list.append(awrd)
+
+    awards = final_list[0:26]
     return awards
 
 def get_nominees(year):
@@ -94,6 +213,7 @@ def get_nominees(year):
     names as keys, and each entry a list of strings. Do NOT change
     the name of this function or what it returns.'''
     # Your code here
+    nominees = None
     return nominees
 
 def get_winner(year):
@@ -101,80 +221,59 @@ def get_winner(year):
     names as keys, and each entry containing a single string.
     Do NOT change the name of this function or what it returns.'''
     # Your code here
-    df = pd.read_json('../gg' + year + '.json')
+    df = pd.read_json('./gg%d.json' % year)
     df = df['text']
-    df = df[df.str.contains('won best|wins best|goes to', case = False)]
-    df = df[~df.str.contains('think|thinking|should|maybe', case = False)]
-    wins_df = df.str.replace('#GoldenGlobes|golden|globes|globe', "", case = False)
-    if wins_df.size > 5000:
-        wins_df = wins_df.sample(5000)
+    df = df[df.str.contains('won|win|goes to|for best', case = False)]
+    # present_df = df[df.str.contains('won|win|goes to|for best', case = False)]
+    df = df[~df.str.contains('think|should|maybe|RT @', case = False)]
+    df = df[df.str.contains('best', case = False)]
+    df = df.str.replace('http\S+|www.\S+', '', case=False,regex=True)
+    df = df.str.replace('TV|tv', "television", case = False, regex = True)
+    wins_df = df.str.replace('#GoldenGlobes|#GoldenGlobe|golden|globes|globes', "", case = False, regex = True)
+    if wins_df.size > 8000:
+        wins_df = wins_df.sample(8000)
 
-    pattern1 = [{"ENT_TYPE": "PERSON", 'OP':'+'}, {"LEMMA": "win"}, {"ORTH":'Best'}, {"DEP": 'compound', 'OP':'+'}, {"POS":'NOUN', 'OP':'*'}, {'IS_PUNCT': True, 'OP':'?'}, {"POS": 'PROPN', 'OP':'*'}]
-    pattern2 = [{"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}, {"LEMMA": "win"}, {"ORTH":'Best'}, {"DEP": 'compound', 'OP':'+'}, {"POS":'NOUN', 'OP':'*'}, {'IS_PUNCT': True, 'OP':'?'}, {"POS": 'PROPN', 'OP':'*'}]
-    pattern3 = [{"ENT_TYPE": "PERSON", 'OP':'+'}, {"LEMMA": "win"}, {"ORTH":'Best'}, {"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}]
-    pattern4 = [{"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}, {"LEMMA": "win"}, {"ORTH":'Best'}, {"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}]
-    pattern5 = [{"ORTH":'Best'}, {"ENT_TYPE": "WORK_OF_ART", 'OP':'+'},{"TEXT": "goes"}, {"TEXT": "to"}, {"ENT_TYPE": "PERSON", 'OP':'+'}] 
-    pattern6 = [{"ORTH":'Best'}, {"DEP": 'compound', 'OP':'+'}, {"POS":'NOUN', 'OP':'*'}, {'IS_PUNCT': True, 'OP':'?'}, {"POS": 'PROPN', 'OP':'*'}, {"TEXT": "goes"}, {"TEXT": "to"}, {"ENT_TYPE": "PERSON", 'OP':'+'}] 
-    
-    matcher.add("Winner", [pattern1, pattern2, pattern3, pattern4, pattern5, pattern6])
+
+    person_pattern = [{"ENT_TYPE": "PERSON", 'OP':'+'}]
+    film_pattern = [{"ENT_TYPE": 'ORG', 'OP':'+'}]
+
+    award_pattern = [{"LOWER":'best'}, {"DEP":{"IN":['compound','nmod','dobj','prep','det','pobj','amod','nsubj','ROOT']}, 'OP':'+'},{'ORTH': '-', 'OP':'?'}, {"POS": {"IN": ['PROPN','NOUN','CCONJ','ADJ']}, 'OP':'*'}]
+
+    matcher = Matcher(nlp.vocab)
+    matcher.add('Person',[person_pattern])
+    matcher.add('Award',[award_pattern])
+    matcher.add('Film',[film_pattern])
 
     winners = {}
-    winners = defaultdict(lambda: 1, winners)
+    winners = defaultdict(lambda: 0, winners)
     for i, text in wins_df.iteritems():
         doc = nlp(text)
         matches = matcher(doc)
         if len(matches) != 0:
-            span = doc[matches[-1][1]:matches[-1][2]]
-            winners[str(span).strip(punctuation).strip()] = winners[str(span).strip(punctuation).strip()] +1
-    
-    winners = sorted(winners.items(), key=lambda item: item[1], reverse = True)
+            key = find_mapping(matches)
+            if (key[0] != '' and key[1] != ''):
+                winners[key] = winners[key] + 1
 
-    award_list = [dict() for x in range(len(new_award_names))]
+    sorte_d = sorted(winners.items(), key=lambda item: item[1], reverse = True)
 
-    for tweet in winners: 
-        tweet = tweet[0]
-        split = tweet.lower().split()
-        
-        index = split.index("best")
+    final_ans = {}
+    for award in award_names:
+        sub_dict = {}
+        sub_dict = defaultdict(lambda: 0, sub_dict)
+        final_ans[award] = sub_dict
+    for pair,count in winners.items():
+        award = pair[1]
+        person = pair[0]
+        possible_awards = map_to_a_award(award)
+        for ard in possible_awards:
+            final_ans[ard][person] = final_ans[ard][person] + count
+    for ans in final_ans:
+        if len(final_ans[ans].items()) > 0:
+            final_ans[ans] = max(final_ans[ans], key=final_ans[ans].get)
+        else:
+            final_ans[ans] = ''
 
-        award_phrase = " ".join(split[index:])
-        matching_awards = DistMeasure(award_phrase)
-        for a in matching_awards:
-            award_index = new_award_names.index(a)
-            global person
-            person = ''
-            if "goes" in split and "to" in split:
-                print("goes")
-                person_index = split.index("goes")
-                person = split[person_index+2:]
-                print(person)
-            else:
-                person = split[:index-1]
-            person = " ".join(person)
-            if person not in award_list[award_index]:
-                award_list[award_index][person] = 1
-            else:
-                award_list[award_index][person] = award_list[award_index][person]+1
-
-    i = 0
-    awards = [[] for x in range(len(new_award_names))]
-    for award in award_list:
-        if award != {}:
-            max_val = max(award.items(), key=operator.itemgetter(1))[1]
-            j = 0
-            list_award = list(award)
-            for b in award:
-                if award[b] == max_val and len(awards[i]) < 1:
-                    awards[i].append(list_award[j])
-                j+=1
-        i+=1
-
-    for award in awards: 
-    if len(award) == 0:
-        award.append("NO WINNER FOUND")
-    award_flat = np.array(awards).flatten()
-    winners = dict(zip(award_names, award_flat)) 
-
+    winners = final_ans
     return winners
 
 def get_presenters(year):
@@ -182,68 +281,257 @@ def get_presenters(year):
     names as keys, and each entry a list of strings. Do NOT change the
     name of this function or what it returns.'''
     # Your code here
-    df = pd.read_json('../gg' + year + '.json')
+    df = pd.read_json('./gg%d.json' % year)
     df = df['text']
-    df = df[df.str.contains(' present', case = False)]
+    df = df[df.str.contains(' present|announc|introduc', case = False)]
     df = df[~df.str.contains('think|should|maybe', case = False)]
+    df = df.str.replace('http\S+|www.\S+', '', case=False,regex=True)
+    df = df.str.replace('TV|tv', "television", case = False, regex = True)
     present_df = df.str.replace('#GoldenGlobes|golden|globes|globe', "", case = False)
-    if present_df.size > 5000:
-        present_df = present_df.sample(5000)
-        return presenters
+    if present_df.size > 10000:
+        present_df = present_df.sample(10000)
 
-    pattern1 = [{"ENT_TYPE": "PERSON", 'OP':'+'}, {"LEMMA": "present"}, {"ORTH":'Best'}, {"DEP": 'compound', 'OP':'+'}, {"POS":'NOUN', 'OP':'*'}, {'IS_PUNCT': True, 'OP':'?'}, {"POS": 'PROPN', 'OP':'*'}]
-    pattern2 = [{"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}, {"LEMMA": "present"}, {"ORTH":'Best'}, {"DEP": 'compound', 'OP':'+'}, {"POS":'NOUN', 'OP':'*'}, {'IS_PUNCT': True, 'OP':'?'}, {"POS": 'PROPN', 'OP':'*'}]
-    pattern3 = [{"ENT_TYPE": "PERSON", 'OP':'+'}, {"LEMMA": "present"}, {"ORTH":'Best'}, {"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}]
-    pattern4 = [{"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}, {"LEMMA": "present"}, {"ORTH":'Best'}, {"ENT_TYPE": "WORK_OF_ART", 'OP':'+'}]
+    person_pattern = [{"ENT_TYPE": "PERSON", 'OP':'+'}]
+    award_pattern = [{"LOWER":'best'}, {"DEP":{"IN":['compound','nmod','dobj','prep','det','pobj','amod','nsubj','ROOT']}, 'OP':'+'},{'ORTH': '-', 'OP':'?'}, {"POS": {"IN": ['PROPN','NOUN','CCONJ','ADJ']}, 'OP':'*'}]
 
-    matcher.add("Presenter", [pattern1, pattern2, pattern3, pattern4])
+    matcher = Matcher(nlp.vocab)
+    matcher.add('Person',[person_pattern])
+    matcher.add('Award',[award_pattern])
 
     presenters = {}
-    presenters = defaultdict(lambda: 1, presenters)
+    presenters = defaultdict(lambda: 0, presenters)
     for i, text in present_df.iteritems():
         doc = nlp(text)
         matches = matcher(doc)
         if len(matches) != 0:
-            span = doc[matches[-1][1]:matches[-1][2]]
-            presenters[str(span).strip(punctuation).strip()] = presenters[str(span).strip(punctuation).strip()] +1
+            key = find_mapping(matches)
+            if (key[0] != '' and key[1] != ''):
+                presenters[key] = presenters[key] +1
 
-    presenters = sorted(presenters.items(), key=lambda item: item[1], reverse = True)
 
-    award_list = [dict() for x in range(len(new_award_names))]
+    presenters = dict(presenters)
+    sort_d = sorted(presenters.items(), key=lambda item: item[1], reverse = True)
 
-    for tweet in presenters: 
-        tweet = tweet[0]
-        split = tweet.lower().split()
-        
-        index = split.index("best")
+    final_ans = {}
+    for award in award_names:
+        sub_dict = {}
+        sub_dict = defaultdict(lambda: 0, sub_dict)
+        final_ans[award] = sub_dict
+    for pair,count in winners.items():
+        award = pair[1]
+        person = pair[0]
+        possible_awards = map_to_a_award(award)
+        for ard in possible_awards:
+            final_ans[ard][person] = final_ans[ard][person] + count
+    for ans in final_ans:
+        if len(final_ans[ans].items()) > 0:
+            m = max(final_ans[ans], key=final_ans[ans].get)
+            final_ans[ans].pop(m)
+            m2 = max(final_ans[ans], key=final_ans[ans].get)
+            
+            while commonwords(m, m2) != 0:
+                final_ans[ans].pop(m2)
+                try:
+                    m2 = max(final_ans[ans], key=final_ans[ans].get)
+                except:
+                    m2 = ''
+            
+            final_ans[ans] = [m,m2]
+        else:
+            final_ans[ans] = []
 
-        award_phrase = " ".join(split[index:])
-        matching_awards = DistMeasure(award_phrase)
-        for a in matching_awards:
-            award_index = new_award_names.index(a)  
-            person = split[:index-1]
-            person = " ".join(person)
-            if person not in award_list[award_index]:
-                award_list[award_index][person] = 1
-            else:
-                award_list[award_index][person] = award_list[award_index][person]+1
-
-    i = 0
-    awards = [[] for x in range(len(new_award_names))]
-    for award in award_list:
-        if award != {}:
-            max_val = max(award.items(), key=operator.itemgetter(1))[1]
-            j = 0
-            list_award = list(award)
-            for b in award:
-                if award[b] == max_val and len(awards[i]) < 2:
-                    awards[i].append(list_award[j])
-                j+=1
-        i+=1
-
-    presenters = dict(zip(award_names, awards)) 
+    presenters = final_ans
     return presenters
 
+def winner_presenter_nominees_helper(year): # This function is to help the nominees be more accurate, see main for how it's run
+    winners = get_winner(year)
+    presenters = get_presenters(year)
+
+    nonom = presenters
+    for each in nonom:
+        nonom[each].append(winners[each])
+
+    new_award_names = [0]*len(award_names)
+    for i in range(len(award_names)):
+        new_award_names[i] = award_names[i].replace(" in ", " ").replace(" a ", " ").replace(" or ", " ").replace(" – ", " ").replace(" - ", " ").lower()
+
+    awardnominees = {}
+    awardnominees = defaultdict(lambda: 1, awardnominees)
+
+    for award in award_names:
+        awardnominees[award] = []
+
+    df = pd.read_json('./gg%d.json' % year)
+    df = df['text']
+    df = df.str.replace('#GoldenGlobes|golden|globes|globe', "", case = False)
+    # nominees_df = df[df.str.contains('nominated', case = False)]
+    nominees_df = df[df.str.contains('Best', case = True)]
+
+    for i, text in nominees_df.iteritems():
+        for j, award in enumerate(new_award_names):
+            awardlst = award.split()
+            awardlst2 = award.replace("television ", "").split()
+            if all(x in text.lower() for x in awardlst) or all(x in text.lower() for x in awardlst2):
+                for ent in nlp(text).ents:
+                    if (ent.label_ == "PERSON" or ent.label == "WORK_OF_ART") and '#' not in ent.text and '@' not in ent.text:
+                        awardnominees[list(awardnominees)[i]].append(ent.text)
+
+    for lst in awardnominees:
+        dd = defaultdict( int )
+        for word in awardnominees[lst]:
+            dd[word] += 1
+        
+        awardnominees[lst] = dd
+
+    nominees_final = {}
+    for i, each in enumerate(awardnominees):
+        nominees_final[each] = []
+        
+        noms = sorted(awardnominees[each].items(), key=lambda item: item[1], reverse = True)
+        presenters_and_winners = nonom[each]
+        
+        if noms == []:
+            continue
+            
+        for j, (name, num) in enumerate(noms):
+            name = name.lower()
+            if j == 0:
+                nominees_final[each].append(name)
+            else:
+                common = 1
+                for inlst in nominees_final[each]:
+                    if commonwords(inlst, name) != 0:
+                        common = 0
+
+                if common == 1 and len(nominees_final[each]) < 5 and name not in presenters_and_winners and '/' not in name and 'rt' not in name:
+                    nominees_final[each].append(name)
+
+    return winners, presenters, nominees_final
+
+def best_dressed(year):
+    df = pd.read_json('./gg%d.json' % year)
+    df = df['text']
+    df = df.str.replace('#GoldenGlobes|golden|globes|globe', "", case = False)
+    dressed_df = df[df.str.contains('best dressed|glamorous|jealous|dress|stunning|fav|gorgeous|red carpet', case = False)]
+
+    if dressed_df.size > 7000:
+        dressed_df = dressed_df.sample(7000)
+
+    dressed = {}
+
+    dressed = defaultdict(lambda: 1, dressed)
+    for i, value in dressed_df.iteritems():
+        for entity in nlp(value).ents:
+            if entity.label_ == 'PERSON':
+                dressed[entity.text] = dressed[entity.text] +1
+                
+    dressed = sorted(dressed.items(), key=lambda item: item[1], reverse = True)
+
+    best_dressed = []
+    for d in dressed:
+        word = d[0].replace("'s", "")
+        if len(best_dressed) == 5:
+            break
+        if len(best_dressed) == 0:
+            best_dressed.append(word)
+        else:
+            common = 1
+            for c in best_dressed:
+                if commonwords(c, word) != 0:
+                    common = 0
+
+            if common == 1:
+                best_dressed.append(word)
+
+    # best_dressed = [d[0] for d in dressed[:5]]
+    return best_dressed
+
+def worst_dressed(year):
+    df = pd.read_json('./gg%d.json' % year)
+    df = df['text']
+    df = df.str.replace('#GoldenGlobes|golden|globes|globe', "", case = False)
+    dressed_df = df[df.str.contains('worst dressed|ugly|gross|weird|worst', case = False)]
+
+    if dressed_df.size > 7000:
+        dressed_df = dressed_df.sample(7000)
+
+    dressed = {}
+
+    dressed = defaultdict(lambda: 1, dressed)
+    for i, value in dressed_df.iteritems():
+        for entity in nlp(value).ents:
+            if entity.label_ == 'PERSON':
+                dressed[entity.text] = dressed[entity.text] +1
+                
+    dressed = sorted(dressed.items(), key=lambda item: item[1], reverse = True)
+
+    worst_dressed = []
+    for d in dressed:
+        word = d[0].replace("'s", "")
+        if len(worst_dressed) == 5:
+            break
+        if len(worst_dressed) == 0:
+            worst_dressed.append(word)
+        else:
+            common = 1
+            for c in worst_dressed:
+                if commonwords(c, word) != 0:
+                    common = 0
+
+            if common == 1:
+                worst_dressed.append(word)
+
+    return worst_dressed
+
+def best_jokes(year):
+    df = pd.read_json('./gg%d.json' % year)
+    df = df['text']
+    df = df.str.replace('#GoldenGlobes|golden|globes|globe', "", case = False)
+    jokes_df = df[df.str.contains('funny|funniest|joke|haha|hilarious', case = False)]
+
+    jokes = {}
+    jokes = defaultdict(lambda: 1, jokes)
+    for i, text in jokes_df.iteritems():
+        for entity in nlp(text).ents:
+            if entity.label_ == 'PERSON':
+                jokes[entity.text] = jokes[entity.text] +1
+                
+    jokes = sorted(jokes.items(), key=lambda item: item[1], reverse = True)
+
+    best_jokes = []
+    for d in jokes:
+        word = d[0].replace("'s", "")
+        if len(best_jokes) == 5:
+            break
+        if len(best_jokes) == 0:
+            best_jokes.append(word)
+        else:
+            common = 1
+            for c in best_jokes:
+                if commonwords(c, word) != 0:
+                    common = 0
+
+            if common == 1:
+                best_jokes.append(word)
+
+    return best_jokes
+
+def best_parties(year):
+    df = pd.read_json('./gg%d.json' % year)
+    df = df['text']
+    df = df.str.replace('#GoldenGlobes|golden|globes|globe', "", case = False)
+    parties_df = df[df.str.contains('party|parties|lit', case = False)]
+
+    parties = {}
+    parties = defaultdict(lambda: 1, parties)
+    for i, text in parties_df.iteritems():
+        for entity in nlp(text).ents:
+            if entity.label_ == 'GPE':
+                parties[entity.text] = parties[entity.text] +1
+                
+    parties = sorted(parties.items(), key=lambda item: item[1], reverse = True)
+
+    return parties[:5]
 
 def pre_ceremony():
     '''This function loads/fetches/processes any data your program
@@ -261,6 +549,52 @@ def main():
     run when grading. Do NOT change the name of this function or
     what it returns.'''
     # Your code here
+    json_2013 = {}
+    json_2015 = {}
+
+    year = [2013, 2015]
+    for each in year:
+        [winners, presenters, nominees] = winner_presenter_nominees_helper(each)
+        awards = get_awards(each)
+        hosts = get_hosts(each)
+        best_dressed = best_dressed(each)
+        worst_dressed = worst_dressed(each)
+        best_jokes = best_jokes(each)
+        best_parties = best_parties(each)
+
+        print("Year = %d" % each)
+        print("Hosts: ", *hosts, sep=", ")
+        for award in award_names:
+            print("Award: ", award)
+            print("Presenters: ", *presenters[award], sep=", ")
+            print("Nominees: ", *nominees[award], sep=", ")
+            print("Winner: ", *winners[award])
+            print("\n")
+            if each == 2013:
+                json_2013[award] = {}
+                json_2013[award]["Presenters"] = presenters
+                json_2013[award]["Nominees"] = nominees
+                json_2013[award]["Winner"] = winner
+            elif each == 2015
+                json_2015[award] = {}
+                json_2015[award]["Presenters"] = presenters
+                json_2015[award]["Nominees"] = nominees
+                json_2015[award]["Winner"] = winner
+
+
+        print("Overall Awards:-------------")
+        print("Best Dressed: ", *best_dressed, sep=", ")
+        print("Worst Dressed: ", *worst_dressed, sep=", ")
+        print("Best Jokes: ", *best_jokes, sep=", ")
+        print("Best Parties: ", *best_parties, sep=", ")
+        print("\n")
+
+        if each == 2013:
+            json_2013["Host"] = hosts
+        elif each == 2015:
+            json_2015["Host"] = hosts
+
+
     return
 
 if __name__ == '__main__':
